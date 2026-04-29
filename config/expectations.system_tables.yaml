@@ -1,0 +1,125 @@
+# Compute Validation — system tables source
+#
+# Field names below match the official system table columns:
+#   system.compute.clusters    https://docs.databricks.com/aws/en/admin/system-tables/compute
+#   system.compute.warehouses  https://docs.databricks.com/aws/en/admin/system-tables/warehouses
+#
+# Instance pools have no system table — they always come from the SDK, so the
+# instance_pools section uses SDK field names.
+
+storage:
+  catalog: main
+  schema: compute_validation
+  table: validation_results
+  warehouse_id: "4b9b953939869799"   # required
+  write_mode: violations_only                    # all | violations_only
+
+fetch:
+  source: system_tables          # sdk | system_tables
+  current_workspace_only: true   # filter system tables to this workspace_id
+
+alerting:
+  min_severity: WARN
+  slack_webhook_url: ""
+  email:
+    enabled: false
+    smtp_host: ""
+    smtp_port: 587
+    smtp_user: ""
+    smtp_password_env: SMTP_PASSWORD
+    from_addr: ""
+    to_addrs: []
+
+# ---- system.compute.clusters columns ----
+clusters:
+  - name: autotermination_required
+    description: All-purpose clusters must auto-terminate within 60 minutes
+    severity: CRITICAL
+    field: auto_termination_minutes
+    op: lte
+    value: 60
+
+  - name: dbr_version_minimum
+    description: Cluster must run DBR 14.x or newer
+    severity: WARN
+    field: dbr_version
+    op: regex
+    value: "^(1[4-9]|[2-9][0-9])\\..*"
+
+  - name: max_autoscale_workers_cap
+    description: Autoscale max workers should not exceed 20
+    severity: WARN
+    field: max_autoscale_workers
+    op: lte
+    value: 20
+
+  - name: data_security_mode_set
+    description: Cluster must declare a data_security_mode
+    severity: WARN
+    field: data_security_mode
+    op: exists
+
+  - name: policy_attached
+    description: Clusters should be governed by a cluster policy
+    severity: INFO
+    field: policy_id
+    op: exists
+
+# ---- system.compute.warehouses columns ----
+sql_warehouses:
+  - name: auto_stop_required
+    description: SQL warehouses must auto-stop within 30 minutes
+    severity: CRITICAL
+    field: auto_stop_minutes
+    op: lte
+    value: 30
+
+  - name: auto_stop_not_disabled
+    description: Auto-stop must not be 0 (never stop)
+    severity: CRITICAL
+    field: auto_stop_minutes
+    op: gt
+    value: 0
+
+  - name: serverless_preferred
+    description: Warehouses should use SERVERLESS compute
+    severity: WARN
+    field: warehouse_type
+    op: eq
+    value: SERVERLESS
+
+  - name: warehouse_size_cap
+    description: Warehouse size should not exceed LARGE
+    severity: WARN
+    field: warehouse_size
+    op: in
+    value: ["2X_SMALL", "X_SMALL", "SMALL", "MEDIUM", "LARGE"]
+
+  - name: max_clusters_cap
+    description: Max scaling clusters should be <= 4
+    severity: WARN
+    field: max_clusters
+    op: lte
+    value: 4
+
+# ---- instance pools (always from SDK) ----
+instance_pools:
+  - name: idle_termination_required
+    description: Instance pools must terminate idle instances within 30 minutes
+    severity: CRITICAL
+    field: idle_instance_autotermination_minutes
+    op: lte
+    value: 30
+
+  - name: min_idle_cap
+    description: min_idle_instances should be 0 to avoid idle spend
+    severity: WARN
+    field: min_idle_instances
+    op: eq
+    value: 0
+
+  - name: max_capacity_set
+    description: Pools should declare a max_capacity to bound cost
+    severity: WARN
+    field: max_capacity
+    op: exists

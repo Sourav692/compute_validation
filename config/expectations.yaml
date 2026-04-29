@@ -1,0 +1,131 @@
+# Compute Validation Expectations
+#
+# Each resource type ("clusters", "sql_warehouses", "instance_pools") has a list
+# of checks. A check has:
+#   - name:        human-readable identifier
+#   - description: optional, shown in alerts
+#   - severity:    INFO | WARN | CRITICAL  (default WARN)
+#   - filter:      optional dotted-path equality filters to scope the check to
+#                  matching resources (e.g. {data_security_mode: USER_ISOLATION})
+#   - field:       dotted path to the attribute being checked
+#   - op:          eq | ne | gt | gte | lt | lte | in | not_in | regex |
+#                  contains | exists | not_exists | truthy | falsy
+#   - value:       comparison value (omit for exists/not_exists/truthy/falsy)
+
+storage:
+  catalog: main
+  schema: compute_validation
+  table: validation_results
+  warehouse_id: "4b9b953939869799"        # REQUIRED to write results — SQL warehouse ID
+  write_mode: all                          # all | violations_only
+
+fetch:
+  source: sdk                  # sdk | system_tables
+  current_workspace_only: true # only used when source: system_tables
+
+alerting:
+  min_severity: WARN      # only alert at this severity or higher
+  slack_webhook_url: ""   # optional — leave empty to disable
+  email:
+    enabled: false
+    smtp_host: ""
+    smtp_port: 587
+    smtp_user: ""
+    smtp_password_env: SMTP_PASSWORD   # name of env var holding password
+    from_addr: ""
+    to_addrs: []
+
+clusters:
+  - name: autotermination_required
+    description: All-purpose clusters must auto-terminate within 60 minutes
+    severity: CRITICAL
+    field: autotermination_minutes
+    op: lte
+    value: 60
+
+  - name: dbr_version_minimum
+    description: Cluster must run DBR 14.3 LTS or newer
+    severity: WARN
+    field: spark_version
+    op: regex
+    value: "^(1[4-9]|[2-9][0-9])\\..*"
+
+  - name: photon_enabled
+    description: Photon should be enabled for performance
+    severity: INFO
+    field: runtime_engine
+    op: eq
+    value: PHOTON
+
+  - name: no_single_user_for_shared
+    description: Shared access mode clusters must not have a single user assigned
+    severity: CRITICAL
+    filter:
+      data_security_mode: USER_ISOLATION
+    field: single_user_name
+    op: not_exists
+
+  - name: max_workers_cap
+    description: Autoscaling max workers should not exceed 20
+    severity: WARN
+    field: autoscale.max_workers
+    op: lte
+    value: 20
+
+sql_warehouses:
+  - name: auto_stop_required
+    description: SQL warehouses must auto-stop within 30 minutes
+    severity: CRITICAL
+    field: auto_stop_mins
+    op: lte
+    value: 30
+    # auto_stop_mins == 0 means "never stop"; covered by separate check below
+
+  - name: auto_stop_not_disabled
+    description: SQL warehouse auto-stop must not be disabled (0 = never stop)
+    severity: CRITICAL
+    field: auto_stop_mins
+    op: gt
+    value: 0
+
+  - name: serverless_preferred
+    description: Warehouses should run on serverless compute
+    severity: WARN
+    field: enable_serverless_compute
+    op: eq
+    value: true
+
+  - name: warehouse_size_cap
+    description: Warehouse size should not exceed LARGE
+    severity: WARN
+    field: cluster_size
+    op: in
+    value: ["2X-Small", "X-Small", "Small", "Medium", "Large"]
+
+  - name: max_clusters_cap
+    description: Max scaling clusters should be <= 4
+    severity: WARN
+    field: max_num_clusters
+    op: lte
+    value: 4
+
+instance_pools:
+  - name: idle_termination_required
+    description: Instance pools must terminate idle instances within 30 minutes
+    severity: CRITICAL
+    field: idle_instance_autotermination_minutes
+    op: lte
+    value: 30
+
+  - name: min_idle_cap
+    description: min_idle_instances should be 0 to avoid idle spend
+    severity: WARN
+    field: min_idle_instances
+    op: eq
+    value: 0
+
+  - name: max_capacity_set
+    description: Pools should declare a max_capacity to bound cost
+    severity: WARN
+    field: max_capacity
+    op: exists
