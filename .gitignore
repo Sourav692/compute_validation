@@ -4,11 +4,13 @@ __pycache__
 .pytest_cache
 .coverage
 .coverage.*
-.coverage.xml
-.coverage.json
-.coverage.yaml
-.coverage.yml
-.coverage.jsonl
-.coverage.jsonl.gz
-.coverage.jsonl.gz.
 .claude
+
+# Python build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Databricks bundle local state
+.databricks/

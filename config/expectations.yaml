@@ -18,6 +18,10 @@ storage:
   table: validation_results
   warehouse_id: "4b9b953939869799"        # REQUIRED to write results — SQL warehouse ID
   write_mode: all                          # all | violations_only
+  write_strategy: append                   # append | overwrite
+  # overwrite truncates each per-resource-type table before insert, so a
+  # resource that's been fixed (no longer violating) disappears from the
+  # table on the next run. Use append to keep history.
 
 fetch:
   source: sdk                  # sdk | system_tables

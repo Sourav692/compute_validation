@@ -30,6 +30,7 @@ class Check:
 
 
 VALID_WRITE_MODES = ("all", "violations_only")
+VALID_WRITE_STRATEGIES = ("append", "overwrite")
 
 
 @dataclass
@@ -39,6 +40,7 @@ class StorageConfig:
     table: str
     warehouse_id: str
     write_mode: str = "all"
+    write_strategy: str = "append"
 
     def table_for(self, resource_type: str) -> str:
         """Per-resource-type Delta table: `{catalog}.{schema}.{table}_{resource_type}`."""
@@ -94,12 +96,18 @@ def load_config(path: str | Path) -> ValidationConfig:
         raise ValueError(
             f"storage.write_mode must be one of {VALID_WRITE_MODES}, got {write_mode!r}"
         )
+    write_strategy = storage_raw.get("write_strategy", "append")
+    if write_strategy not in VALID_WRITE_STRATEGIES:
+        raise ValueError(
+            f"storage.write_strategy must be one of {VALID_WRITE_STRATEGIES}, got {write_strategy!r}"
+        )
     storage = StorageConfig(
         catalog=storage_raw["catalog"],
         schema=storage_raw["schema"],
         table=storage_raw["table"],
         warehouse_id=storage_raw["warehouse_id"],
         write_mode=write_mode,
+        write_strategy=write_strategy,
     )
 
     alert_raw = raw.get("alerting") or {}

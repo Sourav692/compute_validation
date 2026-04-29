@@ -65,7 +65,13 @@ def _sql_literal(v: Any) -> str:
         return "TRUE" if v else "FALSE"
     if isinstance(v, (int, float)):
         return str(v)
-    return "'" + str(v).replace("\\", "\\\\").replace("'", "''") + "'"
+    # Spark SQL uses backslash escaping for string literals — the standard
+    # SQL `''` doubling is parsed as adjacent literals concatenated with an
+    # empty string, eating the apostrophe (so "Sourav Banerjee''s" becomes
+    # "Sourav Banerjees"). Use \' instead, and escape backslashes first so
+    # we don't double-escape ones we just inserted.
+    s = str(v).replace("\\", "\\\\").replace("'", "\\'")
+    return "'" + s + "'"
 
 
 _INSERT_COLUMNS = (
@@ -75,22 +81,99 @@ _INSERT_COLUMNS = (
 )
 
 
+def _get_spark():
+    """Return an active SparkSession when running inside Databricks, else None.
+
+    Inside a Lakeflow Job (notebook task, spark_python_task, or serverless
+    python_wheel_task with databricks-connect), this resolves to a usable
+    session. Local `python main.py` runs return None and fall back to the
+    Statement Execution INSERT path.
+    """
+    try:
+        from pyspark.sql import SparkSession  # type: ignore
+        spark = SparkSession.getActiveSession()
+        if spark is None:
+            spark = SparkSession.builder.getOrCreate()
+        return spark
+    except Exception as exc:
+        log.info("  Spark not available — using SQL Statement Execution path (%s)",
+                 type(exc).__name__)
+        return None
+
+
 def write_results(
     w: WorkspaceClient,
     storage: StorageConfig,
     results: list[CheckResult],
+    resource_types: Iterable[str],
 ) -> None:
-    """Split results by resource_type and write to per-type Delta tables."""
-    if not results:
-        log.info("  no results to write")
-        return
+    """Split results by resource_type and write to per-type Delta tables.
 
+    Two write paths:
+      - Spark DataFrame write (1 op per table) when running inside Databricks.
+      - SQL INSERT batches via Statement Execution API for local dev.
+
+    `resource_types` is the full set of types this bundle manages. In
+    `overwrite` strategy we truncate every one of them (even types with zero
+    rows this run) so a fixed/removed resource disappears from the table.
+    """
     by_type: dict[str, list[CheckResult]] = defaultdict(list)
     for r in results:
         by_type[r.resource_type].append(r)
 
-    for resource_type, rows in by_type.items():
-        _write_one_table(w, storage, resource_type, rows)
+    is_overwrite = storage.write_strategy == "overwrite"
+    types_to_visit = list(resource_types) if is_overwrite else list(by_type.keys())
+
+    spark = _get_spark()
+
+    for resource_type in types_to_visit:
+        rows = by_type.get(resource_type, [])
+        table = storage.table_for(resource_type)
+
+        if not rows:
+            if is_overwrite:
+                log.info("  %s: no rows this run — truncating %s to clear stale data",
+                         resource_type, table)
+                _execute(w, storage.warehouse_id, f"TRUNCATE TABLE {table}")
+            else:
+                log.info("  %s: no rows to write", resource_type)
+            continue
+
+        if spark is not None:
+            _write_via_spark(spark, storage, resource_type, rows)
+        else:
+            if is_overwrite:
+                log.info("  %s: truncating %s before write (write_strategy=overwrite)",
+                         resource_type, table)
+                _execute(w, storage.warehouse_id, f"TRUNCATE TABLE {table}")
+            _write_one_table(w, storage, resource_type, rows)
+
+
+def _write_via_spark(
+    spark, storage: StorageConfig, resource_type: str, rows: list[CheckResult]
+) -> None:
+    """Write all rows for one resource type in a single Spark DataFrame op."""
+    from pyspark.sql import functions as F  # type: ignore
+
+    # storage.table_for returns the backtick-quoted form; saveAsTable needs
+    # the unquoted three-part identifier.
+    qualified = f"{storage.catalog}.{storage.schema}.{storage.table}_{resource_type}"
+    mode = "overwrite" if storage.write_strategy == "overwrite" else "append"
+
+    log.info("  %s: writing %d rows via Spark to %s (mode=%s)",
+             resource_type, len(rows), qualified, mode)
+
+    df = spark.createDataFrame([r.to_dict() for r in rows])
+    # Engine emits run_ts as ISO string; cast to TIMESTAMP to match the table schema.
+    df = df.withColumn("run_ts", F.to_timestamp("run_ts"))
+
+    (df.write
+        .format("delta")
+        .mode(mode)
+        .option("overwriteSchema", "false")
+        .saveAsTable(qualified))
+
+    log.info("  %s: Spark write complete", resource_type)
 
 
 def _write_one_table(
@@ -100,7 +183,9 @@ def _write_one_table(
     rows: list[CheckResult],
 ) -> None:
     table = storage.table_for(resource_type)
-    batch_size = 200000
+    # Each VALUES row is ~150-300 bytes of SQL; the Statement Execution API
+    # has practical limits on statement size, so cap batches conservatively.
+    batch_size = 1000
     total_batches = (len(rows) + batch_size - 1) // batch_size
     for batch_idx, start in enumerate(range(0, len(rows), batch_size), start=1):
         chunk = rows[start:start + batch_size]

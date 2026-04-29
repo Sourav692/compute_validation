@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "compute-validator"
+version = "0.1.0"
+description = "Databricks compute configuration validation framework"
+requires-python = ">=3.10"
+dependencies = [
+    "databricks-sdk>=0.30.0",
+    "pyyaml>=6.0",
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+compute-validate = "compute_validator.cli:main"
+compute-validate-create-views = "compute_validator.create_views:main"
+
+[tool.setuptools.packages.find]
+include = ["compute_validator*"]
+exclude = ["tests*", "config*", "resources*", ".venv*"]

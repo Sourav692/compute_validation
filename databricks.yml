@@ -1,0 +1,63 @@
+# Databricks Asset Bundle for the Compute Validation framework.
+#
+# Deploy:
+#   databricks bundle deploy --target dev      # or prod
+#   databricks bundle run compute_validation   # one-off run
+#
+# The bundle builds a wheel from pyproject.toml and wires it into a Lakeflow
+# Job that runs daily on serverless compute. See resources/compute_validation.job.yml.
+
+bundle:
+  name: compute_validation
+
+include:
+  - resources/*.yml
+
+artifacts:
+  compute_validator_wheel:
+    type: whl
+    # Use the project venv's Python so the build picks up the requirements
+    # already installed locally (avoids PyPI TLS/proxy issues with the
+    # system Python's isolated build env).
+    build: ./.venv/bin/python -m build --wheel
+    path: .
+
+variables:
+  notification_email:
+    description: Recipient for job email notifications (failures and violations).
+    default: sourav.banerjee@databricks.com
+
+  warehouse_id:
+    description: SQL warehouse used to query system tables and write Delta results.
+    default: "4b9b953939869799"
+
+  config_file:
+    description: Bundle-relative path to the expectations YAML.
+    default: config/expectations.system_tables.yaml
+
+  schedule_cron:
+    description: Quartz cron for the validation schedule.
+    default: "0 0 6 * * ?"   # daily at 06:00 UTC
+
+  schedule_pause_status:
+    description: PAUSED or UNPAUSED.
+    default: UNPAUSED
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://e2-demo-field-eng.cloud.databricks.com
+    variables:
+      schedule_pause_status: PAUSED   # don't auto-run dev deployments
+
+  prod:
+    mode: production
+    workspace:
+      host: https://e2-demo-field-eng.cloud.databricks.com
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      user_name: ${var.notification_email}
+    variables:
+      schedule_pause_status: UNPAUSED

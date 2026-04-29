@@ -1,0 +1,92 @@
+# Lakeflow Job that runs the compute validator daily on serverless compute.
+#
+# Email alerting model:
+#   The CLI is invoked with --fail-on-violation, so the task exits non-zero
+#   whenever a check is violated. That triggers email_notifications.on_failure
+#   below, which sends to ${var.notification_email}. The same notification path
+#   covers genuine task errors (auth failures, missing tables, etc.).
+#
+#   If you want violation alerts AND task-error alerts on separate channels,
+#   drop --fail-on-violation here and use the Slack/email config inside the
+#   YAML expectations file (alerts.py handles that path).
+
+resources:
+  jobs:
+    compute_validation:
+      name: "[${bundle.target}] Compute Validation"
+      description: |
+        Validates Databricks compute (clusters, SQL warehouses, instance pools)
+        against config/expectations.system_tables.yaml. Writes results to Delta
+        and emails ${var.notification_email} on any violation.
+
+      schedule:
+        quartz_cron_expression: ${var.schedule_cron}
+        timezone_id: UTC
+        pause_status: ${var.schedule_pause_status}
+
+      max_concurrent_runs: 1
+      timeout_seconds: 1800   # 30 min hard cap
+
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+        on_duration_warning_threshold_exceeded:
+          - ${var.notification_email}
+        no_alert_for_skipped_runs: true
+
+      tags:
+        owner: ${var.notification_email}
+        purpose: compliance
+        managed_by: dab
+
+      tasks:
+        - task_key: validate_compute
+          description: Run the compute_validate CLI; non-zero exit → email alert.
+
+          python_wheel_task:
+            package_name: compute_validator
+            entry_point: compute-validate
+            parameters:
+              - "--config"
+              - "${workspace.file_path}/${var.config_file}"
+              - "--fail-on-violation"
+              - "--log-level"
+              - "INFO"
+
+          environment_key: validator_env
+
+          # Job-level email_notifications cover this task too. A task-level
+          # block here would let us route differently per task — leaving it off
+          # so we don't double-email.
+
+        - task_key: create_summary_views
+          description: |
+            Create per-resource summary views with one row per compute resource
+            and a failing_checks struct array (check_name, severity, field, op,
+            expected, actual, passed). Runs even when validate_compute exits
+            non-zero (i.e. violations found) so views always reflect the latest
+            run.
+          depends_on:
+            - task_key: validate_compute
+          run_if: ALL_DONE
+
+          python_wheel_task:
+            package_name: compute_validator
+            entry_point: compute-validate-create-views
+            parameters:
+              - "--config"
+              - "${workspace.file_path}/${var.config_file}"
+              - "--log-level"
+              - "INFO"
+
+          environment_key: validator_env
+
+      environments:
+        - environment_key: validator_env
+          spec:
+            client: "1"
+            dependencies:
+              # Path is relative to THIS resource YAML, not bundle root.
+              # `..` escapes resources/ to find the wheel built by the
+              # `compute_validator_wheel` artifact under <bundle_root>/dist/.
+              - ../dist/*.whl

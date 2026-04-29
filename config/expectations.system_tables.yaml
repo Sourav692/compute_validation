@@ -12,7 +12,11 @@ storage:
   schema: compute_validation
   table: validation_results
   warehouse_id: "4b9b953939869799"   # required
-  write_mode: violations_only                    # all | violations_only
+  write_mode: violations_only        # all | violations_only
+  write_strategy: overwrite          # append | overwrite
+  # overwrite truncates each per-resource-type table before insert, so a
+  # resource that's been fixed (no longer violating) disappears from the
+  # table on the next run. Use append to keep history.
 
 fetch:
   source: system_tables          # sdk | system_tables

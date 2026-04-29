@@ -75,7 +75,8 @@ def run(config_path: str | Path, profile: str | None = None, dry_run: bool = Fal
     else:
         rows_to_write = results
         log.info("  write_mode=all — writing %d rows", len(rows_to_write))
-    write_results(w, config.storage, rows_to_write)
+    log.info("  write_strategy=%s", config.storage.write_strategy)
+    write_results(w, config.storage, rows_to_write, SUPPORTED_RESOURCES)
 
     log.info("  evaluating alerts (min_severity=%s)", config.alerting.min_severity)
     send_alerts(config.alerting, results, workspace_host)

@@ -36,13 +36,21 @@ def matches_filter(resource: dict[str, Any], filt: dict[str, Any]) -> bool:
 
 def evaluate(op: str, actual: Any, expected: Any) -> bool:
     """Return True if the resource PASSES the check."""
+    # `exists`/`not_exists` treat both _MISSING (field absent) and None
+    # (field present but null) as "not set". System tables surface unset
+    # config as NULL, which becomes None in our dicts; without this rule a
+    # NULL `policy_id` would falsely pass `policy_attached: exists`.
     if op == "exists":
-        return actual is not _MISSING
+        return actual is not _MISSING and actual is not None
     if op == "not_exists":
-        return actual is _MISSING
+        return actual is _MISSING or actual is None
     if actual is _MISSING:
-        # field missing fails comparison ops
+        # field absent fails comparison ops (treated as violation, not skip)
         return False
+    # None on comparison ops falls through to the comparison; the engine
+    # catches the resulting TypeError and marks the row as skipped, which
+    # matches the intent that "no value to compare" is not a violation
+    # (e.g. NULL max_autoscale_workers on a single-node cluster).
     if op == "truthy":
         return bool(actual)
     if op == "falsy":
